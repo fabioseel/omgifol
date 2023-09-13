@@ -2,7 +2,8 @@ import os, glob
 import omg.palette
 from omg.lump  import *
 from omg.util import *
-from omg.wadio import WadIO
+from omg.wadio import WadIO, Header
+from io import BytesIO
 
 class LumpGroup(OrderedDict):
     """A dict-like object for holding a group of lumps."""
@@ -45,6 +46,10 @@ class LumpGroup(OrderedDict):
         be used, if possible."""
         for m in self:
             wadio.insert(m, self[m].data, use_free=use_free)
+
+    def save_bytestream(self, stream:BytesIO):
+        for m in self:
+            stream.write(self[m].data)
 
     def copy(self):
         """Creates a deep copy."""
@@ -105,6 +110,9 @@ class MarkerGroup(LumpGroup):
         LumpGroup.save_wadio(self, wadio, use_free=use_free)
         wadio.insert(self.suffix.replace('*', ''), bytes())
 
+    def save_bytestream(self, stream: BytesIO):
+        LumpGroup.save_bytestream(self,stream)
+
 
 class HeaderGroup(LumpGroup):
     """Group for lumps arranged header-tail (e.g. maps)."""
@@ -161,6 +169,25 @@ class HeaderGroup(LumpGroup):
                     # after writing lumps, remove them from the shallow copy so the wildcard doesn't include them again
                     for name in wcinlist(hs, t):
                         wadio.insert(name, hs[name].data, use_free=use_free)
+                        del hs[name]
+                except IndexError:
+                    pass
+    
+    def save_bytestream(self, stream: BytesIO):
+        for h in self:
+            hs = copy(self[h]) # temporary shallow copy
+            try:
+                stream.write(hs["_HEADER_"].data)
+                del hs["_HEADER_"]
+            except KeyError:
+                # wadio.insert(h, bytes()) TODO: What should happen here?
+                pass
+            for t in self.tail:
+                try:
+                    # for UDMF maps, a wildcard is used to handle anything between 'TEXTMAP' and 'ENDMAP'
+                    # after writing lumps, remove them from the shallow copy so the wildcard doesn't include them again
+                    for name in wcinlist(hs, t):
+                        stream.write(hs[name].data)
                         del hs[name]
                 except IndexError:
                     pass
@@ -305,6 +332,21 @@ class WAD:
         w.save()
         if use_backup:
             os.remove(tmpfilename)
+
+    def to_stream(self)-> BytesIO: 
+        """Save contents to a byte stream."""
+        stream = BytesIO()
+
+        header = Header() # TODO: Header can not be correctly created "on the fly". Disentangling in wadio.py needed...
+        # dir = join([e.pack() for e in self.entries])
+        # self.header.dir_len = len(self.entries)
+        # self.header.dir_ptr = self.write_free(dir)
+
+
+        stream.write(header.pack())
+        for group in write_order:
+            self.__dict__[group].save_bytestream(stream)
+        return stream
 
     def __add__(self, other):
         assert isinstance(other, WAD)
